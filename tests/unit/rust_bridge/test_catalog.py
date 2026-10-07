@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+from datetime import datetime, timezone
 from typing import Final
 
 import pytest
 
-from litellm.rust_bridge import catalog, configuration
+import litellm
+from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.rust_bridge import catalog, configuration, pricing
 from litellm.rust_bridge.catalog import (
     Context,
     LoggerContext,
@@ -16,6 +19,7 @@ from litellm.rust_bridge.catalog import (
     Rules,
 )
 from litellm.rust_bridge.configuration import Decision, Rollout
+from litellm.types.utils import Usage
 
 
 @pytest.fixture(autouse=True)
@@ -49,6 +53,10 @@ def test_shipped_decisions(
         assert catalog.rollout(context) is Rollout.RUST_OPT_IN
         opted_in: Final = environment == "1" or (environment is None and process is True)
         assert catalog.decision(context) is (Decision.RUST_WITH_FALLBACK if opted_in else Decision.PYTHON)
+    elif route is Route.COST_CALCULATOR:
+        assert catalog.rollout(context) is Rollout.RUST_OPT_OUT
+        opted_out: Final = environment == "0" or (environment is None and process is False)
+        assert catalog.decision(context) is (Decision.PYTHON if opted_out else Decision.RUST_WITH_FALLBACK)
     else:
         assert catalog.rollout(context) is Rollout.PYTHON_ONLY
         assert catalog.decision(context) is Decision.PYTHON
@@ -68,6 +76,34 @@ def test_logger_rollout_obeys_the_global_switch() -> None:
     assert catalog.decision(LoggerContext()) is Decision.PYTHON
     configuration.rust(True)
     assert catalog.decision(LoggerContext()) is Decision.RUST_WITH_FALLBACK
+
+
+@pytest.mark.parametrize("switch", ("process", "environment"))
+def test_cost_calculator_opt_out_keeps_python_cost_without_loading_native(
+    monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None, switch: str
+) -> None:
+    class BindingMustNotLoad:
+        def load(self) -> pricing.CatalogCostCalculator | None:
+            pytest.fail("An operator opt-out must be checked before loading the native calculator")
+
+    monkeypatch.setattr(pricing, "CATALOG_COST", BindingMustNotLoad())
+    if switch == "process":
+        configuration.rust(False)
+    else:
+        monkeypatch.setenv("LITELLM_RUST", "false")
+    model: Final = "cost-operator-opt-out-fixture"
+    litellm.register_model(
+        {model: {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 1, "output_cost_per_token": 2}}
+    )
+
+    result: Final = generic_cost_per_token(
+        model,
+        Usage(prompt_tokens=10, completion_tokens=2),
+        "openai",
+        current_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+
+    assert result == (10.0, 4.0)
 
 
 @pytest.mark.parametrize(

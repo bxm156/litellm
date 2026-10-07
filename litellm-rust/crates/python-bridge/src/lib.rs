@@ -10,6 +10,7 @@ mod lifecycle;
 mod logger;
 mod marshal;
 mod preflight;
+mod pricing;
 mod python_settings;
 mod routes;
 mod secrets;
@@ -26,6 +27,8 @@ mod _native {
     use crate::errors::{RustBridgeDeclined, RustUpstreamError};
     #[pymodule_export]
     use crate::logger::NativeDiagnosticProcessor;
+    #[pymodule_export]
+    use crate::pricing::calculate_catalog_cost;
     #[pymodule_export]
     use crate::routes::audio_transcription::{atranscription, transcription};
     #[pymodule_export]
@@ -113,6 +116,7 @@ mod tests {
                 "NativeTraceStorage",
                 "trace_encode_error",
                 "trace_span_rows",
+                "calculate_catalog_cost",
                 "TokenCounter",
                 "Tokenizer",
                 "gil_stats",

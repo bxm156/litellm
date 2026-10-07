@@ -19,6 +19,7 @@ from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import (
     tier_rate,
 )
 from litellm.llms.fireworks_ai.cache_pricing import with_default_cache_read_rate
+from litellm.rust_bridge.pricing import calculate_cost as native_catalog_cost
 from litellm.types.utils import (
     CacheCreationTokenDetails,
     CallTypes,
@@ -397,12 +398,16 @@ def _get_tiered_base_costs(model_info: ModelInfo, usage: Usage) -> tuple[float, 
         if "output_cost_per_token" in tier
         else get_cost_per_unit(model_info, "output_cost_per_token") or 0.0
     )
+    hourly_cache_creation_cost: Final = (
+        tier_rate(tier, "cache_creation_input_token_cost_above_1hr")
+        if tier.get("cache_creation_input_token_cost_above_1hr") is not None
+        else cache_creation_cost
+    )
     return (
         tier_rate(tier, "input_cost_per_token"),
         completion_cost,
         cache_creation_cost,
-        tier_rate(tier, "cache_creation_input_token_cost_above_1hr", "cache_creation_input_token_cost")
-        or cache_creation_cost,
+        hourly_cache_creation_cost,
         tier_rate(tier, "cache_read_input_token_cost", "input_cost_per_token"),
     )
 
@@ -1402,6 +1407,21 @@ def generic_cost_per_token(
         )
 
     billing_time: Final = current_time if current_time is not None else current_billing_time()
+    completion_details: Final = (
+        parse_completion_tokens_details(usage) if usage.completion_tokens_details is not None else None
+    )
+    native_cost: Final = native_catalog_cost(
+        model_info=resolved_model_info,
+        custom_llm_provider=custom_llm_provider,
+        usage=usage,
+        prompt=prompt_tokens_details,
+        completion=completion_details,
+        service_tier=service_tier,
+        billed_at=billing_time,
+        threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
+    )
+    if native_cost is not None:
+        return _token_cost_with_uplifts(native_cost, resolved_model_info, data_residency, vertex_location)
     (
         prompt_base_cost,
         completion_base_cost,
@@ -1433,13 +1453,12 @@ def generic_cost_per_token(
     image_tokens = 0
     video_tokens = 0
     is_text_tokens_total = False
-    if usage.completion_tokens_details is not None:
-        completion_tokens_details: Final = parse_completion_tokens_details(usage)
-        audio_tokens = completion_tokens_details["audio_tokens"]
-        text_tokens = completion_tokens_details["text_tokens"]
-        reasoning_tokens = completion_tokens_details["reasoning_tokens"]
-        image_tokens = completion_tokens_details["image_tokens"]
-        video_tokens = completion_tokens_details["video_tokens"]
+    if completion_details is not None:
+        audio_tokens = completion_details["audio_tokens"]
+        text_tokens = completion_details["text_tokens"]
+        reasoning_tokens = completion_details["reasoning_tokens"]
+        image_tokens = completion_details["image_tokens"]
+        video_tokens = completion_details["video_tokens"]
 
     # Handle text_tokens calculation:
     # 1. If text_tokens is explicitly provided and > 0, use it
@@ -1495,20 +1514,20 @@ def generic_cost_per_token(
         )
         completion_cost += float(video_tokens) * _output_cost_per_video_token
 
-    ## REGIONAL DATA-RESIDENCY UPLIFT
-    # Applied as a flat multiplier across all token costs for the request
-    # when the upstream is a regionalized OpenAI host (eu./us.api.openai.com).
-    uplift: Final = get_regional_uplift_multiplier(resolved_model_info, data_residency)
-    if uplift != 1.0:
-        prompt_cost *= uplift
-        completion_cost *= uplift
+    return _token_cost_with_uplifts(
+        (prompt_cost, completion_cost), resolved_model_info, data_residency, vertex_location
+    )
 
-    vertex_uplift: Final = get_vertex_regional_endpoint_uplift(resolved_model_info, vertex_location)
-    if vertex_uplift != 1.0:
-        prompt_cost *= vertex_uplift
-        completion_cost *= vertex_uplift
 
-    return prompt_cost, completion_cost
+def _token_cost_with_uplifts(
+    cost: tuple[float, float],
+    model_info: ModelInfo,
+    data_residency: str | None,
+    vertex_location: str | None,
+) -> tuple[float, float]:
+    regional: Final = get_regional_uplift_multiplier(model_info, data_residency)
+    vertex: Final = get_vertex_regional_endpoint_uplift(model_info, vertex_location)
+    return cost[0] * regional * vertex, cost[1] * regional * vertex
 
 
 def _coerce_token_count(value: object) -> int:

@@ -26109,6 +26109,8 @@ export interface components {
         AgentNode: {
             /** Duration Ms */
             duration_ms: number;
+            /** Estimated Calls */
+            estimated_calls?: number;
             /** Invocations */
             invocations: number;
             /** Llm Calls */
@@ -46101,6 +46103,8 @@ export interface components {
         Span: {
             /** Agent */
             agent: string;
+            /** Cost Source */
+            cost_source?: ("gateway" | "estimated") | null;
             /** Duration Ms */
             duration_ms: number;
             /** Error */
@@ -48396,6 +48400,8 @@ export interface components {
             duration_ms: number;
             /** Error Count */
             error_count: number;
+            /** Estimated Calls */
+            estimated_calls?: number;
             /** Frameworks */
             frameworks?: string[];
             /** Input Preview */

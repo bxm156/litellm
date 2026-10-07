@@ -1,4 +1,3 @@
-import json
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Final, cast
@@ -22,9 +21,6 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     generic_cost_per_token,
     get_billed_token_rates,
     get_token_type_cost_breakdown,
-)
-from litellm.llms.gemini.image_generation.cost_calculator import (
-    cost_calculator as gemini_image_generation_cost_calculator,
 )
 from litellm.llms.vertex_ai.image_generation.cost_calculator import (
     cost_calculator as vertex_image_generation_cost_calculator,
@@ -1239,6 +1235,36 @@ def test_generic_cost_per_token_honors_non_standard_above_threshold():
         assert round(completion_cost, 10) == round(18e-6 * completion_tokens, 10)
     finally:
         litellm.model_cost.pop(model, None)
+
+
+@pytest.mark.parametrize(("hourly_rate", "expected"), ((None, 2.0), (0.0, 0.0), (4.0, 4.0)))
+def test_tiered_hourly_cache_rate_falls_back_only_when_missing(
+    local_model_cost_map: None, hourly_rate: float | None, expected: float
+) -> None:
+    model: Final = "tiered-hourly-cache-fixture"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "tiered_pricing": [
+                    {
+                        "range": [0, 200],
+                        "input_cost_per_token": 1.0,
+                        "output_cost_per_token": 2.0,
+                        "cache_creation_input_token_cost": 2.0,
+                        "cache_creation_input_token_cost_above_1hr": hourly_rate,
+                    }
+                ],
+            }
+        }
+    )
+
+    rates: Final = _get_token_base_cost(
+        litellm.get_model_info(model=model, custom_llm_provider="openai"), Usage(prompt_tokens=100)
+    )
+
+    assert rates == (1.0, 2.0, 2.0, expected, 1.0)
 
 
 def test_generic_cost_per_token_tiered_pricing_charges_cache_creation_at_tier_rate():
