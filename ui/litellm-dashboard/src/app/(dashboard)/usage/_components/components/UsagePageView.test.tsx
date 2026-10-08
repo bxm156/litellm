@@ -57,6 +57,7 @@ beforeAll(() => {
 vi.mock("@/components/networking", () => ({
   dailyActivityAggregatedCall: vi.fn(),
   dailyActivityKeyPageCall: vi.fn(),
+  userDailyActivityUserPageCall: vi.fn(),
   dailyActivityKeySearchCall: vi.fn(),
   dailyActivityModelTopKeysCall: vi.fn(),
   dailyActivityExportCall: vi.fn(),
@@ -206,6 +207,7 @@ describe("UsagePage", () => {
   const mockUserDailyActivityAggregatedCall = vi.fn();
   const mockDailyActivityAggregatedCall = vi.mocked(networking.dailyActivityAggregatedCall);
   const mockDailyActivityKeyPageCall = vi.mocked(networking.dailyActivityKeyPageCall);
+  const mockUserDailyActivityUserPageCall = vi.mocked(networking.userDailyActivityUserPageCall);
   const mockTagListCall = vi.mocked(networking.tagListCall);
   const mockGatewayDailyActivityCall = vi.mocked(networking.gatewayDailyActivityCall);
   const mockUseCustomers = vi.mocked(useCustomers);
@@ -433,6 +435,13 @@ describe("UsagePage", () => {
       offset: 0,
       limit: 50,
     });
+    mockUserDailyActivityUserPageCall.mockReset();
+    mockUserDailyActivityUserPageCall.mockResolvedValue({
+      users: [],
+      total_users: 0,
+      offset: 0,
+      limit: 50,
+    });
     mockDailyActivityAggregatedCall.mockImplementation((entity: string, request: unknown) =>
       entity === "user" ? mockUserDailyActivityAggregatedCall(request) : Promise.resolve({ results: [], metadata: {} }),
     );
@@ -622,6 +631,32 @@ describe("UsagePage", () => {
     // Check for chart titles (these are in the Overview tab)
     expect(screen.getByText("Top models")).toBeInTheDocument();
     expect(screen.getByText("Top Virtual Keys")).toBeInTheDocument();
+    expect(screen.getByText("Top Users by Spend")).toBeInTheDocument();
+  });
+
+  it("places Top Users by Spend directly below Top Virtual Keys", async () => {
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+    });
+
+    const topKeys = screen.getByText("Top Virtual Keys");
+    const topUsers = screen.getByText("Top Users by Spend");
+    expect(topKeys.compareDocumentPosition(topUsers) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("loads the User Activity tab from the user page endpoint", async () => {
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+    });
+    fireEvent.click(screen.getByText("User Activity"));
+
+    await waitFor(() => {
+      expect(mockUserDailyActivityUserPageCall).toHaveBeenCalledWith(expect.any(Object), 0, 50);
+    });
   });
 
   it("should render the top models chart stacked in the shared usage palette", async () => {
@@ -1396,6 +1431,7 @@ describe("UsagePage", () => {
       expect(screen.getByText("Overview")).toBeInTheDocument();
       expect(screen.getByText("Model Activity")).toBeInTheDocument();
       expect(screen.getByText("Key Activity")).toBeInTheDocument();
+      expect(screen.getByText("User Activity")).toBeInTheDocument();
       expect(screen.getByText("MCP Server Activity")).toBeInTheDocument();
       expect(screen.getByText("Endpoint Activity")).toBeInTheDocument();
     });
